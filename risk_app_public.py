@@ -30,12 +30,25 @@ def download_asset_data(tickers, start_date, end_date):
     data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True)
     return data
 
-def download_asset_data(tickers, start_date, end_date, interval='1d'):
-    from datetime import datetime, timedelta
-    import pandas as pd
-    import yfinance as yf
-    import streamlit as st
+import yfinance as yf
+import pandas as pd
+import streamlit as st
+from datetime import datetime, date, timedelta
 
+def download_asset_data(tickers, start_date, end_date, interval='1d'):
+    """
+    Downloads asset data from yfinance with robust handling of daily and intraday data,
+    including appending last intraday point to daily data if available.
+
+    Parameters:
+    - tickers: str or list of str, ticker symbols.
+    - start_date: str or datetime/date, start date for data.
+    - end_date: str or datetime/date, end date for data.
+    - interval: str, data interval like '1d', '1m', '5m', etc.
+
+    Returns:
+    - pandas.DataFrame with downloaded data.
+    """
     max_days_lookup = {
         '1m': 7,
         '2m': 30,
@@ -47,40 +60,90 @@ def download_asset_data(tickers, start_date, end_date, interval='1d'):
         '1d': 3650
     }
 
-    # Ensure datetime objects
+    # Convert string dates to datetime.date if needed
     if isinstance(start_date, str):
-        start_date = datetime.fromisoformat(start_date)
-    if isinstance(end_date, str):
-        end_date = datetime.fromisoformat(end_date)
+        start_date = datetime.fromisoformat(start_date).date()
+    elif isinstance(start_date, datetime):
+        start_date = start_date.date()
 
-    # Trim range if needed
+    if isinstance(end_date, str):
+        end_date = datetime.fromisoformat(end_date).date()
+    elif isinstance(end_date, datetime):
+        end_date = end_date.date()
+
+    # Enforce max days limit per interval
     max_days = max_days_lookup.get(interval, 60)
     if (end_date - start_date).days > max_days:
         start_date = end_date - timedelta(days=max_days)
+        st.warning(f"Date range trimmed to last {max_days} days due to interval limit.")
+
+    st.info(f"Fetching data for {tickers} from {start_date} to {end_date} with interval '{interval}'")
 
     try:
         data = yf.download(
             tickers,
             start=start_date,
-            end=end_date,
+            end=end_date + timedelta(days=1),  # yfinance end is exclusive
             interval=interval,
-            group_by='ticker',
+            group_by='ticker' if isinstance(tickers, list) else False,
             auto_adjust=True,
             progress=False
         )
 
         if data is None or data.empty:
-            raise ValueError("Empty data returned.")
+            st.warning("No data downloaded.")
+            return pd.DataFrame()
+
+        st.write(f"Downloaded {tickers} data shape: {data.shape}")
+
+        if interval == '1d':
+            today = date.today()
+
+            # Extract latest date from data for daily interval
+            if isinstance(tickers, list):
+                first_ticker = tickers[0]
+                if first_ticker in data.columns.levels[0]:
+                    latest_date = data[first_ticker].dropna().index.max().date()
+                else:
+                    latest_date = data.dropna().index.max().date()
+            else:
+                latest_date = data.dropna().index.max().date()
+
+            st.write(f"Latest data date: {latest_date}, Today: {today}")
+
+            # Append last intraday data point if daily data is outdated
+            if latest_date and latest_date < today:
+                intraday_data = yf.download(
+                    tickers,
+                    period='1d',
+                    interval='1m',
+                    progress=False,
+                    auto_adjust=True
+                )
+                if not intraday_data.empty:
+                    st.write(f"Intraday data shape: {intraday_data.shape}")
+
+                    last_row = intraday_data.iloc[[-1]]
+
+                    # Append if last intraday timestamp not in daily data
+                    if not last_row.index.isin(data.index).any():
+                        st.write(f"Appending last intraday data point with timestamp {last_row.index[0]}")
+                        data = pd.concat([data, last_row])
+                else:
+                    st.warning("No intraday data available to append.")
+        else:
+            st.write("Interval is not daily, returning downloaded data.")
 
         return data
 
     except Exception as e:
-        st.warning(f"{e} Falling back to daily data.")
+        st.warning(f"Failed to download data due to error: {e} Falling back to daily data.")
         if interval != '1d':
             return download_asset_data(tickers, start_date, end_date, interval='1d')
         else:
             st.error("Failed to fetch even daily data.")
             return pd.DataFrame()
+
 
 def compute_average_close(data, tickers):
     if not tickers:
