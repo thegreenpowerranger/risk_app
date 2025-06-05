@@ -400,7 +400,7 @@ with col_end:
     end_date = st.date_input("End Date", value=today)
 
 
-lookback = st.slider("Williams %R Lookback Period", min_value=5, max_value=50, value=14)
+#lookback = st.slider("Williams %R Lookback Period", min_value=5, max_value=50, value=14)
 
 # Tickers input
 cols_input = st.columns(3)
@@ -410,7 +410,7 @@ for i, col in enumerate(cols_input):
     tick = col.text_input(f"Ticker {i+1}", value=default_tickers[i]).upper()
     tickers.append(tick)
 
-offset_days = st.slider("Strategy Regime Offset (days)", min_value=0, max_value=10, value=0)
+#offset_days = st.slider("Strategy Regime Offset (days)", min_value=0, max_value=10, value=0)
 
 if st.button("Run Analysis for All"):
     results_all = {}
