@@ -3,10 +3,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import mplfinance as mpf
 from datetime import datetime, timedelta
 
-# --- Your asset config and analysis functions from before (same as above) ---
 
+# --- Asset Classes Config ---
 asset_classes_config = {
     "QQQ": {
         "risk_on_assets": ["SPY", "QQQ", "HYG", "XLF", "XLK"],
@@ -27,124 +29,55 @@ asset_classes_config = {
 }
 
 def download_asset_data(tickers, start_date, end_date):
+    today = pd.to_datetime(datetime.today().date())
+    end_dt = pd.to_datetime(end_date)
+
+    # Step 1: Download daily data
     data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True)
+
+    # Step 2: If today is the end_date, check if today's data is missing
+    if end_dt.date() == today.date():
+        def add_intraday_latest(ticker):
+            try:
+                for interval in ['1m', '30m', '60m']:
+                    intraday = yf.Ticker(ticker).history(period='1d', interval=interval)
+                    if not intraday.empty:
+                        # Take last intraday row (latest timestamp)
+                        last = intraday.iloc[[-1]]
+        
+                        # Normalize index to date only (naive, without timezone)
+                        date_only = last.index[0].date()
+        
+                        daily = data[ticker] if isinstance(data.columns, pd.MultiIndex) else data
+        
+                        # Make sure daily index is datetime.date, or convert to datetime with no timezone
+                        daily_index_dates = daily.index.normalize().date if hasattr(daily.index, "normalize") else daily.index.date
+        
+                        # Check if that date is in daily data index
+                        if pd.Timestamp(date_only) in daily.index.normalize():
+                            # Replace the daily row for that date with intraday latest row
+                            # But first, set last's index to match daily index type exactly
+                            new_index = daily.index[daily.index.normalize() == pd.Timestamp(date_only)][0]
+                            last.index = [new_index]
+        
+                            # Drop old row(s) for that date
+                            daily = daily[~(daily.index.normalize() == pd.Timestamp(date_only))]
+        
+                        else:
+                            # If date not present, set last.index to normalized datetime with no timezone
+                            last.index = [pd.Timestamp(date_only)]
+        
+                        # Append intraday latest row
+                        daily = pd.concat([daily, last])
+                        daily = daily.sort_index()
+                        return daily
+        
+            except Exception as e:
+                print(f"Error fetching intraday data for {ticker}: {e}")
+        
+            return data[ticker] if isinstance(data.columns, pd.MultiIndex) else data
+
     return data
-
-import yfinance as yf
-import pandas as pd
-import streamlit as st
-from datetime import datetime, date, timedelta
-
-def download_asset_data(tickers, start_date, end_date, interval='1d'):
-    """
-    Downloads asset data from yfinance with robust handling of daily and intraday data,
-    including appending last intraday point to daily data if available.
-
-    Parameters:
-    - tickers: str or list of str, ticker symbols.
-    - start_date: str or datetime/date, start date for data.
-    - end_date: str or datetime/date, end date for data.
-    - interval: str, data interval like '1d', '1m', '5m', etc.
-
-    Returns:
-    - pandas.DataFrame with downloaded data.
-    """
-    max_days_lookup = {
-        '1m': 7,
-        '2m': 30,
-        '5m': 60,
-        '15m': 60,
-        '30m': 60,
-        '60m': 60,
-        '1h': 60,
-        '1d': 3650
-    }
-
-    # Convert string dates to datetime.date if needed
-    if isinstance(start_date, str):
-        start_date = datetime.fromisoformat(start_date).date()
-    elif isinstance(start_date, datetime):
-        start_date = start_date.date()
-
-    if isinstance(end_date, str):
-        end_date = datetime.fromisoformat(end_date).date()
-    elif isinstance(end_date, datetime):
-        end_date = end_date.date()
-
-    # Enforce max days limit per interval
-    max_days = max_days_lookup.get(interval, 60)
-    if (end_date - start_date).days > max_days:
-        start_date = end_date - timedelta(days=max_days)
-        st.warning(f"Date range trimmed to last {max_days} days due to interval limit.")
-
-    st.info(f"Fetching data for {tickers} from {start_date} to {end_date} with interval '{interval}'")
-
-    try:
-        data = yf.download(
-            tickers,
-            start=start_date,
-            end=end_date + timedelta(days=1),  # yfinance end is exclusive
-            interval=interval,
-            group_by='ticker' if isinstance(tickers, list) else False,
-            auto_adjust=True,
-            progress=False
-        )
-
-        if data is None or data.empty:
-            st.warning("No data downloaded.")
-            return pd.DataFrame()
-
-        st.write(f"Downloaded {tickers} data shape: {data.shape}")
-
-        if interval == '1d':
-            today = date.today()
-
-            # Extract latest date from data for daily interval
-            if isinstance(tickers, list):
-                first_ticker = tickers[0]
-                if first_ticker in data.columns.levels[0]:
-                    latest_date = data[first_ticker].dropna().index.max().date()
-                else:
-                    latest_date = data.dropna().index.max().date()
-            else:
-                latest_date = data.dropna().index.max().date()
-
-            st.write(f"Latest data date: {latest_date}, Today: {today}")
-
-            # Append last intraday data point if daily data is outdated
-            if latest_date and latest_date < today:
-                intraday_data = yf.download(
-                    tickers,
-                    period='1d',
-                    interval='1m',
-                    progress=False,
-                    auto_adjust=True
-                )
-                if not intraday_data.empty:
-                    st.write(f"Intraday data shape: {intraday_data.shape}")
-
-                    last_row = intraday_data.iloc[[-1]]
-
-                    # Append if last intraday timestamp not in daily data
-                    if not last_row.index.isin(data.index).any():
-                        st.write(f"Appending last intraday data point with timestamp {last_row.index[0]}")
-                        data = pd.concat([data, last_row])
-                else:
-                    st.warning("No intraday data available to append.")
-        else:
-            st.write("Interval is not daily, returning downloaded data.")
-
-        return data
-
-    except Exception as e:
-        st.warning(f"Failed to download data due to error: {e} Falling back to daily data.")
-        if interval != '1d':
-            return download_asset_data(tickers, start_date, end_date, interval='1d')
-        else:
-            st.error("Failed to fetch even daily data.")
-            return pd.DataFrame()
-
-
 def compute_average_close(data, tickers):
     if not tickers:
         return pd.Series(dtype=float)
@@ -165,18 +98,18 @@ def williams_r(series, lookback=14):
 def generate_risk_regime(wr_series, threshold=-50):
     return pd.Series(np.where(wr_series > threshold, "Risk-On", "Risk-Off"), index=wr_series.index)
 
-def compute_risk_analysis_for_ticker(ticker, start_date="2020-01-01", end_date="2023-01-01", lookback=14):
+def compute_risk_analysis_for_ticker(ticker, start_date, end_date, lookback=14):
     config = asset_classes_config.get(ticker)
     if not config:
-        raise ValueError(f"Ticker {ticker} not found in asset_classes_config")
+        st.error(f"Ticker {ticker} not found in asset_classes_config")
+        return None
 
     risk_on_assets = config["risk_on_assets"]
     risk_off_assets = config["risk_off_assets"]
     all_assets = list(set(risk_on_assets + risk_off_assets))
 
-    data = download_asset_data(all_assets, start_date, end_date,interval=selected_interval)
+    data = download_asset_data(all_assets, start_date, end_date)
 
-    # Invert CHF to match expected "CHF/USD" performance as risk-off
     if "CHF=X" in data.columns.levels[0]:
         data["CHF=X", "Close"] = 1 / data["CHF=X", "Close"]
 
@@ -187,7 +120,7 @@ def compute_risk_analysis_for_ticker(ticker, start_date="2020-01-01", end_date="
 
     composite_index = risk_on_close - risk_off_close if not risk_off_close.empty else risk_on_close
 
-    wr_values = williams_r(composite_index)
+    wr_values = williams_r(composite_index, lookback)
     regimes = generate_risk_regime(wr_values)
 
     return {
@@ -205,21 +138,16 @@ def plot_with_risk_regime(ticker, results):
     data = results['data']
     regimes = results['regimes']
 
-    if ticker not in data.columns.levels[0]:
-        st.error(f"{ticker} not in downloaded data.")
-        return
-
     close = data[ticker]['Close'].dropna()
     aligned_regimes = regimes.loc[close.index].ffill()
 
-    rolling_vol = close.pct_change().rolling(window=30).std() * (252 ** 0.5)  # Annualised
+    rolling_vol = close.pct_change().rolling(window=30).std() * (252 ** 0.5)
 
+    vix = None
     if '^VIX' in data.columns.levels[0]:
         vix = data['^VIX']['Close'].reindex(close.index).ffill()
-    else:
-        vix = None
 
-    fig, ax1 = plt.subplots(figsize=(6, 4))
+    fig, ax1 = plt.subplots(figsize=(14, 6))
 
     ax1.plot(close, label=f'{ticker} Price', color='black')
     ax1.set_ylabel('Price', color='black')
@@ -244,9 +172,8 @@ def plot_with_risk_regime(ticker, results):
     ax2 = ax1.twinx()
     ax2.set_ylabel('Volatility / VIX', color='blue')
     ax2.plot(rolling_vol, label='30d Rolling Volatility', color='blue', linestyle='--')
-
     if vix is not None:
-        ax2.plot(vix, label='VIX Index', color='orange', linestyle='-')
+        ax2.plot(vix, label='VIX Index', color='orange')
 
     ax2.tick_params(axis='y', labelcolor='blue')
 
@@ -254,16 +181,13 @@ def plot_with_risk_regime(ticker, results):
     lines_2, labels_2 = ax2.get_legend_handles_labels()
     ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left')
 
-    ax1.set_title(f"{ticker} Price & Risk Regime")
+    ax1.set_title(f"{ticker} with Risk Regime, 30d Volatility, and VIX")
+
     st.pyplot(fig)
 
-def simulate_strategies(ticker, results, start_capital=10000, offset_days=0, plot=True):
+def simulate_strategies(ticker, results, start_capital=10000, offset_days=0):
     data = results['data']
     regimes = results['regimes']
-
-    if ticker not in data.columns.levels[0]:
-        st.error(f"{ticker} not in downloaded data.")
-        return None, None, None
 
     close = data[ticker]['Close'].dropna()
     aligned_regimes = regimes.reindex(close.index).ffill()
@@ -278,8 +202,6 @@ def simulate_strategies(ticker, results, start_capital=10000, offset_days=0, plo
 
     trades = []
     in_trade = False
-    entry_date = None
-    entry_price = None
     capital = start_capital
 
     for i in range(1, len(close)):
@@ -303,21 +225,122 @@ def simulate_strategies(ticker, results, start_capital=10000, offset_days=0, plo
                 "Return %": pct_return * 100,
                 "Capital After Trade": capital
             })
-
             in_trade = False
 
-    trade_log_df = pd.DataFrame(trades)
+    trades_df = pd.DataFrame(trades)
 
-    if plot:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(strat_a_value, label="Risk-On Strategy", color='green')
-        ax.plot(strat_b_value, label="Buy and Hold", color='blue')
-        ax.set_title(f"Strategy Comparison ({ticker})\nOffset: {offset_days} days")
-        ax.legend()
-        ax.grid()
-        st.pyplot(fig)
+    st.subheader(f"Strategy Simulation for {ticker}")
+    st.line_chart(pd.DataFrame({
+        "Strategy A (Regime based)": strat_a_value,
+        "Strategy B (Buy & Hold)": strat_b_value
+    }))
 
-    return strat_a_value, strat_b_value, trade_log_df
+    st.markdown("### Trades Summary")
+    st.dataframe(trades_df)
+
+    # Calculate duration metrics
+    risk_on_days = (aligned_regimes == "Risk-On").sum()
+    risk_off_days = (aligned_regimes == "Risk-Off").sum()
+    total_days = risk_on_days + risk_off_days
+    total_years = total_days / 365.25
+
+    # Identify transitions to count trades
+    transitions = aligned_regimes.ne(aligned_regimes.shift())
+    risk_on_entries = (aligned_regimes == "Risk-On") & transitions
+    trades = risk_on_entries.sum()
+    trades_per_year = trades / total_years if total_years > 0 else 0
+
+    # Average duration in each regime
+    risk_on_periods = aligned_regimes[aligned_regimes == "Risk-On"]
+    risk_off_periods = aligned_regimes[aligned_regimes == "Risk-Off"]
+    avg_days_risk_on = risk_on_days / trades if trades > 0 else 0
+    avg_days_risk_off = risk_off_days / trades if trades > 0 else 0
+
+    # Separate winning and losing trades
+    wins = [r for r in returns if r > 0]
+    losses = [abs(r) for r in returns if r <= 0]
+
+    # Number of winning trades
+    num_wins = sum(1 for r in returns if r > 0)
+
+    # Total trades
+    total_trades = len(returns)
+
+    # Win rate as percentage
+    win_rate = (num_wins / total_trades) * 100 if total_trades > 0 else 0
+
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("Trades/Year", f"{trades_per_year:.1f}")
+    metric_cols[1].metric("Risk-On Days", risk_on_days)
+    metric_cols[2].metric("Risk-Off Days", risk_off_days)
+    metric_cols[3].metric("Avg Days Risk-On", f"{avg_days_risk_on:.1f}")
+    metric_cols[4].metric("Avg Days Risk-Off", f"{avg_days_risk_off:.1f}")
+    metric_cols[5].metric("Win Rate", f"{win_rate:.1f}%")
+
+
+# --- Step 6: Detailed Risk Regime Info ---
+def get_detailed_risk_regime_infos(results, ticker):
+    regimes = results['regimes'].ffill()
+    composite = results['composite_index']
+    wr = results['williams_r']
+    vol_on = results['risk_on_volume']
+    vol_off = results['risk_off_volume']
+    data = results['data']
+
+    if ticker not in data.columns.levels[0]:
+        raise ValueError(f"{ticker} not in downloaded data.")
+
+    price_series = data[ticker]['Close'].dropna()
+
+    df = pd.DataFrame({
+        "Regime": regimes,
+        "Composite": composite,
+        "Williams %R": wr,
+        "Risk-On Volume": vol_on,
+        "Risk-Off Volume": vol_off,
+        "Price": price_series
+    }).dropna()
+
+    info = []
+    current_regime = df["Regime"].iloc[0]
+    start_date = df.index[0]
+
+    for i in range(1, len(df)):
+        if df["Regime"].iloc[i] != current_regime:
+            end_date = df.index[i]
+            period = df.loc[start_date:end_date]
+
+            wr_start = period["Williams %R"].iloc[0]
+            vol_ratio = (period["Risk-On Volume"].mean() / period["Risk-Off Volume"].mean()) if period["Risk-Off Volume"].mean() != 0 else np.nan
+            price_change = (period["Price"].iloc[-1] - period["Price"].iloc[0]) / period["Price"].iloc[0]
+
+            info.append({
+                "Regime": current_regime,
+                "Start Date": start_date,
+                "End Date": end_date,
+                "Williams %R Start": wr_start,
+                "Volume Ratio (Risk-On / Risk-Off)": vol_ratio,
+                "Price Change %": price_change * 100
+            })
+
+            current_regime = df["Regime"].iloc[i]
+            start_date = df.index[i]
+
+    # Add last regime period info
+    period = df.loc[start_date:]
+    wr_start = period["Williams %R"].iloc[0]
+    vol_ratio = (period["Risk-On Volume"].mean() / period["Risk-Off Volume"].mean()) if period["Risk-Off Volume"].mean() != 0 else np.nan
+    price_change = (period["Price"].iloc[-1] - period["Price"].iloc[0]) / period["Price"].iloc[0]
+    info.append({
+        "Regime": current_regime,
+        "Start Date": start_date,
+        "End Date": df.index[-1],
+        "Williams %R Start": wr_start,
+        "Volume Ratio (Risk-On / Risk-Off)": vol_ratio,
+        "Price Change %": price_change * 100
+    })
+
+    return pd.DataFrame(info)
 
 def get_detailed_risk_regime_infos(results, ticker):
     regimes = results['regimes'].ffill()
@@ -328,208 +351,328 @@ def get_detailed_risk_regime_infos(results, ticker):
     data = results['data']
 
     if ticker not in data.columns.levels[0]:
-        st.error(f"{ticker} not in downloaded data.")
+        raise ValueError(f"{ticker} not in downloaded data.")
+
+    price_series = data[ticker]['Close'].dropna()
+
+    df = pd.DataFrame({
+        "Regime": regimes,
+        "Composite": composite,
+        "Williams %R": wr,
+        "Risk-On Volume": vol_on,
+        "Risk-Off Volume": vol_off,
+        "Price": price_series
+    }).dropna()
+
+    # Add this check here:
+    if df.empty:
+        # Return empty DataFrame so caller handles it gracefully
         return pd.DataFrame()
 
-    close = data[ticker]['Close'].dropna()
-    regimes = regimes.reindex(close.index).ffill()
-    composite = composite.reindex(close.index).ffill()
-    wr = wr.reindex(close.index).ffill()
-    vol_on = vol_on.reindex(close.index).fillna(0)
-    vol_off = vol_off.reindex(close.index).fillna(0)
+    info = []
+    current_regime = df["Regime"].iloc[0]
+    start_date = df.index[0]
 
-    regime_changes = regimes.ne(regimes.shift())
-    periods = regimes[regime_changes].index.tolist() + [regimes.index[-1]]
+    for i in range(1, len(df)):
+        if df["Regime"].iloc[i] != current_regime:
+            end_date = df.index[i]
+            period = df.loc[start_date:end_date]
 
-    detailed_records = []
-    for i in range(len(periods) - 1):
-        start = periods[i]
-        end = periods[i + 1]
-        mask = (regimes.index >= start) & (regimes.index < end)
+            wr_start = period["Williams %R"].iloc[0]
+            vol_ratio = (period["Risk-On Volume"].mean() / period["Risk-Off Volume"].mean()) if period["Risk-Off Volume"].mean() != 0 else np.nan
+            price_change = (period["Price"].iloc[-1] - period["Price"].iloc[0]) / period["Price"].iloc[0]
 
-        detailed_records.append({
-            "Start": start,
-            "End": end,
-            "Duration (days)": (end - start).days,
-            "Regime": regimes.loc[start],
-            "Avg Composite Index": composite.loc[mask].mean(),
-            "Avg Williams %R": wr.loc[mask].mean(),
-            "Avg Risk-On Volume": vol_on.loc[mask].mean(),
-            "Avg Risk-Off Volume": vol_off.loc[mask].mean(),
-        })
+            info.append({
+                "Regime": current_regime,
+                "Start Date": start_date,
+                "End Date": end_date,
+                "Williams %R Start": wr_start,
+                "Volume Ratio (Risk-On / Risk-Off)": vol_ratio,
+                "Price Change %": price_change * 100
+            })
 
-    detailed_df = pd.DataFrame(detailed_records)
-    return detailed_df
+            current_regime = df["Regime"].iloc[i]
+            start_date = df.index[i]
 
-# --- Streamlit UI ---
+    # Add last regime period info
+    period = df.loc[start_date:]
+    wr_start = period["Williams %R"].iloc[0]
+    vol_ratio = (period["Risk-On Volume"].mean() / period["Risk-Off Volume"].mean()) if period["Risk-Off Volume"].mean() != 0 else np.nan
+    price_change = (period["Price"].iloc[-1] - period["Price"].iloc[0]) / period["Price"].iloc[0]
+    info.append({
+        "Regime": current_regime,
+        "Start Date": start_date,
+        "End Date": df.index[-1],
+        "Williams %R Start": wr_start,
+        "Volume Ratio (Risk-On / Risk-Off)": vol_ratio,
+        "Price Change %": price_change * 100
+    })
 
-# --- Your previous functions remain unchanged ---
+    return pd.DataFrame(info)
 
-# Enable wide mode by default
-st.set_page_config(layout="wide")
+def plot_technical_indicators(ticker, results):
+    data = results['data']
+    regimes = results['regimes']
 
-st.title("Risk Regime Analysis")
+    if ticker not in data.columns.levels[0]:
+        raise ValueError(f"{ticker} not in downloaded data.")
+
+    df = data[ticker].dropna().copy()
+    df.index = pd.to_datetime(df.index)
+
+    # Calculate Bollinger Bands
+    window = 20
+    df['SMA20'] = df['Close'].rolling(window).mean()
+    df['STD20'] = df['Close'].rolling(window).std()
+    df['BB_upper'] = df['SMA20'] + 2 * df['STD20']
+    df['BB_lower'] = df['SMA20'] - 2 * df['STD20']
+
+    # Calculate 200 EMA
+    df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
+
+    # Calculate MACD
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_hist'] = df['MACD'] - df['MACD_signal']
+
+    aligned_regimes = regimes.loc[df.index].ffill()
+
+    # Prepare colors for risk regimes
+    regime_colors = {'Risk-On': 'green', 'Risk-Off': 'red'}
+
+    # Plotting
+    fig, (ax_price, ax_macd) = plt.subplots(2, 1, figsize=(14,10), sharex=True,
+                                            gridspec_kw={'height_ratios': [3,1]})
+
+    # --- Plot candlesticks ---
+    o = df['Open'].values
+    h = df['High'].values
+    l = df['Low'].values
+    c = df['Close'].values
+    dates = mdates.date2num(df.index.to_pydatetime())
+
+    width = 0.6
+    width2 = 0.1
+    col_up = 'green'
+    col_down = 'red'
+
+    for i in range(len(df)):
+        color = col_up if c[i] >= o[i] else col_down
+        ax_price.plot([dates[i], dates[i]], [l[i], h[i]], color=color)  # high-low line
+        ax_price.add_patch(plt.Rectangle((dates[i]-width/2, min(o[i], c[i])),
+                                         width, abs(c[i]-o[i]),
+                                         facecolor=color, edgecolor=color))
+
+    # --- Plot Bollinger Bands ---
+    ax_price.plot(df.index, df['BB_upper'], color='blue', label='BB Upper')
+    ax_price.plot(df.index, df['BB_lower'], color='blue', label='BB Lower')
+
+    # --- Plot 200 EMA as dotted ---
+    ax_price.plot(df.index, df['EMA200'], color='black', linestyle='dotted', label='200 EMA')
+
+    ax_price.set_ylabel('Price')
+    ax_price.legend(loc='upper left')
+
+    # --- Plot MACD ---
+    ax_macd.plot(df.index, df['MACD'], color='fuchsia', label='MACD')
+    ax_macd.plot(df.index, df['MACD_signal'], color='blue', label='Signal')
+    ax_macd.bar(df.index, df['MACD_hist'], color='gray', alpha=0.5, label='Histogram')
+
+    ax_macd.set_ylabel('MACD')
+    ax_macd.legend(loc='upper left')
+
+    # --- Risk regime background shading ---
+    current_regime = aligned_regimes.iloc[0]
+    start_idx = df.index[0]
+
+    for i in range(1, len(aligned_regimes)):
+        if aligned_regimes.iloc[i] != current_regime:
+            end_idx = df.index[i]
+            ax_price.axvspan(start_idx, end_idx, color=regime_colors[current_regime], alpha=0.2)
+            current_regime = aligned_regimes.iloc[i]
+            start_idx = end_idx
+    # Last span
+    ax_price.axvspan(start_idx, df.index[-1], color=regime_colors[current_regime], alpha=0.2)
+
+    # Formatting x-axis
+    ax_macd.xaxis.set_major_locator(mdates.MonthLocator())
+    ax_macd.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    plt.suptitle(f'{ticker} Price with Bollinger Bands, 200 EMA and MACD\nwith Risk Regime Background')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+    st.pyplot(fig)
+
+def get_current_risk_regime_info(ticker, results): #actually not in use
+    """
+    Returns info about the current risk regime for the given ticker:
+    - start date of the current regime
+    - last available price of the ticker
+    - confidence (strength) of the regime in percentage
+    
+    Confidence here is derived from Williams %R value:
+    - For Risk-On: closer to 0 means stronger (scale accordingly)
+    - For Risk-Off: closer to -100 means stronger (scale accordingly)
+    
+    Adjust confidence calculation as needed.
+    """
+    regimes = results['regimes'].ffill()
+    wr = results['williams_r']
+    data = results['data']
+
+    if ticker not in data.columns.levels[0]:
+        raise ValueError(f"{ticker} not in downloaded data.")
+
+    price_series = data[ticker]['Close'].dropna()
+    regime_series = regimes.reindex(price_series.index).ffill()
+    wr_series = wr.reindex(price_series.index).ffill()
+
+    # Get current regime and its start date
+    current_regime = regime_series.iloc[-1]
+    # Find when this current regime started (the last transition date)
+    regime_changes = regime_series != regime_series.shift()
+    regime_start_date = regime_series[regime_changes].index[-1]
+
+    # Last price
+    last_price = price_series.iloc[-1]
+
+    # Calculate confidence (example):
+    # Williams %R ranges from -100 to 0
+    # For Risk-On: closer to 0 is stronger => confidence = 100 + wr_value (wr_value is negative)
+    # For Risk-Off: closer to -100 is stronger => confidence = abs(wr_value)
+    wr_current = wr_series.iloc[-1]
+
+    if current_regime == "Risk-On":
+        confidence = 100 + wr_current  # wr_current is negative, so add to 100
+    else:
+        confidence = abs(wr_current)
+
+    # Clamp confidence between 0 and 100
+    confidence = max(0, min(100, confidence))
+
+    return {
+        "current_regime": current_regime,
+        "regime_start_date": regime_start_date.strftime('%Y-%m-%d'),
+        "last_price": last_price,
+        "confidence_percent": confidence
+    }
 
 
-# Interval selection
-interval_options = {
-    "1 Minute": "1m",
-    "2 Minutes": "2m",
-    "5 Minutes": "5m",
-    "15 Minutes": "15m",
-    "30 Minutes": "30m",
-    "1 Hour": "1h",
-    "1 Day (recommended)": "1d",
-    "1 Week": "1wk",
-    "1 Month": "1mo"
-}
+def select_random_period_fixed_range(start_year=2010):
+    start_date = pd.Timestamp(f"{start_year}-01-01")
+    end_date = pd.Timestamp.today()
+    start_u = start_date.value
+    end_u = end_date.value
+    rand_u = np.random.randint(start_u, end_u, size=2)
+    rand_dates = pd.to_datetime(rand_u)
+    start_rand, end_rand = sorted(rand_dates)
+    return start_rand.date(), end_rand.date()
 
-selected_interval_label = st.selectbox("Select data interval", list(interval_options.keys()), index=6)  # default: '1 Hour'
-selected_interval = interval_options[selected_interval_label]
+def randomize_dates():
+    start, end = select_random_period_fixed_range()
+    st.session_state.start_date = start
+    st.session_state.end_date = end
 
+def main():
+    # Initialize session state values if not present
+    if 'start_date' not in st.session_state:
+        st.session_state.start_date = pd.Timestamp.today() - pd.Timedelta(days=60)
+    if 'end_date' not in st.session_state:
+        st.session_state.end_date = pd.Timestamp.today()
 
-# Default dates: 1 year ago to today
-today = datetime.today().date()
-one_month_ago = today - timedelta(days=30)
+    st.set_page_config(layout="wide")
+    st.title("Risk Regime Analysis")
 
-# Display start and end date on the same line
-col_start, col_end = st.columns(2)
-with col_start:
-    start_date = st.date_input("Start Date", value=one_month_ago)
-with col_end:
-    end_date = st.date_input("End Date", value=today)
-
-
-lookback = st.slider("Williams %R Lookback Period", min_value=5, max_value=50, value=14)
-
-# Tickers input
-cols_input = st.columns(3)
-tickers = []
-default_tickers = ["QQQ", "^GDAXI", "^SSMI"]
-for i, col in enumerate(cols_input):
-    tick = col.text_input(f"Ticker {i+1}", value=default_tickers[i]).upper()
-    tickers.append(tick)
-
-offset_days = st.slider("Strategy Regime Offset (days)", min_value=0, max_value=10, value=0)
-
-if st.button("Run Analysis for All"):
-    results_all = {}
-    for ticker in tickers:
-        try:
-            with st.spinner(f"Processing {ticker}..."):
-                res = compute_risk_analysis_for_ticker(ticker, str(start_date), str(end_date))
-                results_all[ticker] = res
-        except Exception as e:
-            st.error(f"Error processing {ticker}: {e}")
-
-    cols = st.columns(3)
-    for i, ticker in enumerate(tickers):
-        with cols[i]:
-            st.header(ticker)
+    # Default dates: 1 month ago to today
+    today = datetime.today().date()
+    one_month_ago = today - timedelta(days=30)
 
 
-            # Get regimes Series
-            regimes = results_all[ticker]['regimes'].ffill()
+    # Tickers input in 3 columns
+    cols_input = st.columns(3)
+    tickers = []
+    default_tickers = ["QQQ", "^GDAXI", "^SSMI"]
 
-            # Get the current regime and its start date
-            last_regime = regimes.iloc[-1]
-            regime_change_idx = regimes[::-1].ne(last_regime).idxmax()
-            
-            #regime_start_date = regimes.index[regimes.index.get_loc(regime_change_idx) + 1] if regime_change_idx != regimes.index[0] else regimes.index[0]
-            regime_idx = regimes.index.get_loc(regime_change_idx)
-            if regime_idx + 1 < len(regimes.index):
-                regime_start_date = regimes.index[regime_idx + 1]
-            else:
-                regime_start_date = regimes.index[regime_idx]  # fallback to last valid index
+    for i, col in enumerate(cols_input):
+        tick = col.text_input(f"Ticker {i+1}", value=default_tickers[i]).upper()
+        tickers.append(tick)
 
-            # Display current regime info
-            st.markdown(f"**🟢 Current Regime:** `{last_regime}` since **{regime_start_date.strftime('%Y-%m-%d')}**")
+    # Button to randomize dates
+    if st.button("Select Random Time Period"):
+        randomize_dates()
 
-            # Initialize trade_log_df for each ticker
-            trade_log_df = _,_,trades_df = simulate_strategies(ticker, results_all[ticker], offset_days=offset_days,plot=False)
-            # Extract necessary series
-            regimes = results_all[ticker]['regimes'].ffill()
+    # Display inputs side-by-side, using session state for default values
+    col_start, col_end = st.columns(2)
+    with col_start:
+        start_date = st.date_input("Start Date", value=st.session_state.start_date)
+    with col_end:
+        end_date = st.date_input("End Date", value=st.session_state.end_date)
+
+    st.session_state.start_date = start_date
+    st.session_state.end_date = end_date
+    #st.write(f"Selected period: **{st.session_state.start_date}** to **{st.session_state.end_date}**")
+
+    if st.button("Run Analysis for All"):
+        results_all = {}
+        for ticker in tickers:
+            try:
+                with st.spinner(f"Processing {ticker}..."):
+                    res = compute_risk_analysis_for_ticker(ticker, str(start_date), str(end_date))
+                    if res is None:
+                        st.error(f"Skipping {ticker} due to missing config or data.")
+                        continue
+                    results_all[ticker] = res
+            except Exception as e:
+                st.error(f"Error processing {ticker}: {e}")
+
+        # Display results in 3 columns for the 3 tickers
+        cols = st.columns(3)
+        for i, ticker in enumerate(tickers):
+            with cols[i]:
+                st.subheader(ticker)
+
+                res = results_all.get(ticker)
+                if not res:
+                    st.write("No results available.")
+                    continue
+
+                last_regime,regime_start_date,last_price,confidence_percent=get_current_risk_regime_info(ticker,res)
+                # Current regime status (last regime)
+                last_regime = res['regimes'].iloc[-1]
+                color = "green" if last_regime == "Risk-On" else "red"
+                st.markdown(f"**Current Regime:** <span style='color:{color}; font-weight:bold'>{last_regime}</span>", unsafe_allow_html=True)
+
+                # Plot risk regime
+                plot_with_risk_regime(ticker, res)
+                
+
+                # Display detailed regime info
+                st.subheader("Detailed Risk Regime Information")
+                detailed_df = get_detailed_risk_regime_infos(res, ticker)
+
+                # Optional: format table (e.g., round values)
+                st.dataframe(detailed_df.round(2).iloc[::-1])
+
+                # Plot strategy comparison
+                simulate_strategies(ticker, res)
 
 
-            # Total period
-            total_days = (regimes.index[-1] - regimes.index[0]).days
-            total_years = total_days / 365.25
+                st.markdown("### Technical Indicators with Risk Regimes")
+                plot_technical_indicators(ticker,res)
 
-            # Trades per Year
-            trades_per_year = len(trades_df) / total_years if total_years > 0 else 0
 
-            # 2. Risk-On and 3. Risk-Off Days
-            risk_on_days = (regimes == "Risk-On").sum()
-            risk_off_days = (regimes == "Risk-Off").sum()
 
-            # 4. Avg Days Risk-On and 5. Avg Days Risk-Off
-            regime_changes = regimes.ne(regimes.shift()).cumsum()
-            durations = regimes.groupby(regime_changes).agg(['first', 'size'])
-            avg_days_risk_on = durations[durations['first'] == 'Risk-On']['size'].mean()
-            avg_days_risk_off = durations[durations['first'] == 'Risk-Off']['size'].mean()
 
-            # Show 6 metrics
-            metric_cols = st.columns(6)
-            metric_cols[0].metric("Trades/Year", f"{trades_per_year:.1f}")
-            metric_cols[1].metric("Risk-On Days", risk_on_days)
-            metric_cols[2].metric("Risk-Off Days", risk_off_days)
-            metric_cols[3].metric("Avg Days Risk-On", f"{avg_days_risk_on:.1f}")
-            metric_cols[4].metric("Avg Days Risk-Off", f"{avg_days_risk_off:.1f}")
-            metric_cols[5].metric("Total Period (Years)", f"{total_years:.2f}")
 
-            if ticker in results_all:
-                plot_with_risk_regime(ticker, results_all[ticker])
-                strat_a, strat_b, trades_df = simulate_strategies(ticker, results_all[ticker], offset_days=offset_days,plot=False)
-                if trades_df is not None and not trades_df.empty:
-                    st.subheader("Trade Log")
-                    st.dataframe(trades_df)
 
-                details_df = get_detailed_risk_regime_infos(results_all[ticker], ticker)
-                if not details_df.empty:
-                    st.subheader("Regime Details")
-                    st.dataframe(details_df)
 
-                #import plotly.graph_objects as go
 
-                #if strat_a is not None and strat_b is not None:
-                #    st.subheader("📈 Strategy Comparison (Interactive)")
 
-                    # Convert to Series if necessary
-                #    if isinstance(strat_a, pd.DataFrame) and 'Equity Curve' in strat_a.columns:
-                #        strat_a_series = strat_a['Equity Curve']
-                #    else:
-                #        strat_a_series = strat_a
 
-                #    if isinstance(strat_b, pd.DataFrame) and 'Equity Curve' in strat_b.columns:
-                #        strat_b_series = strat_b['Equity Curve']
-                #    else:
-                #        strat_b_series = strat_b
 
-                #    fig = go.Figure()
-                #    fig.add_trace(go.Scatter(
-                #        x=strat_a_series.index,
-                #        y=strat_a_series.values,
-                #        mode='lines',
-                #        name='Strategy A',
-                #        line=dict(color='blue')
-                #    ))
-                #    fig.add_trace(go.Scatter(
-                #        x=strat_b_series.index,
-                #        y=strat_b_series.values,
-                #        mode='lines',
-                #        name='Strategy B',
-                #        line=dict(color='orange')
-                #    ))
 
-                #    fig.update_layout(
-                #        xaxis_title='Date',
-                #        yaxis_title='Equity Value',
-                #        title=f'{ticker} – Strategy Equity Comparison',
-                #        height=300,
-                #        margin=dict(t=40, b=30),
-                #        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                #    )
 
-                #    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"No results for {ticker}")
+if __name__ == "__main__":
+    main()
