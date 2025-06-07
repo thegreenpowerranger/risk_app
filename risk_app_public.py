@@ -187,7 +187,7 @@ def compute_risk_analysis_for_ticker(ticker, start_date="2020-01-01", end_date="
 
     composite_index = risk_on_close - risk_off_close if not risk_off_close.empty else risk_on_close
 
-    wr_values = williams_r(composite_index)
+    #wr_values = williams_r(composite_index)
     regimes = generate_risk_regime(wr_values)
 
     return {
@@ -400,7 +400,7 @@ with col_end:
     end_date = st.date_input("End Date", value=today)
 
 
-#lookback = st.slider("Williams %R Lookback Period", min_value=5, max_value=50, value=14)
+lookback = st.slider("Williams %R Lookback Period", min_value=5, max_value=50, value=14)
 
 # Tickers input
 cols_input = st.columns(3)
