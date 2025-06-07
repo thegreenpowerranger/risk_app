@@ -187,7 +187,7 @@ def compute_risk_analysis_for_ticker(ticker, start_date="2020-01-01", end_date="
 
     composite_index = risk_on_close - risk_off_close if not risk_off_close.empty else risk_on_close
 
-    wr_values = williams_r(composite_index, lookback)
+    wr_values = williams_r(composite_index)
     regimes = generate_risk_regime(wr_values)
 
     return {
@@ -417,7 +417,7 @@ if st.button("Run Analysis for All"):
     for ticker in tickers:
         try:
             with st.spinner(f"Processing {ticker}..."):
-                res = compute_risk_analysis_for_ticker(ticker, str(start_date), str(end_date), lookback)
+                res = compute_risk_analysis_for_ticker(ticker, str(start_date), str(end_date))
                 results_all[ticker] = res
         except Exception as e:
             st.error(f"Error processing {ticker}: {e}")
