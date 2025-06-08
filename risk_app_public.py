@@ -4,8 +4,31 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-
+import mplfinance as mpf
 from datetime import datetime, timedelta
+
+
+
+# ✅ This must come FIRST
+st.set_page_config(layout="wide")
+
+# Now safe to use other Streamlit functions
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["auth"]["password"]:
+            st.session_state["authenticated"] = True
+        else:
+            st.session_state["authenticated"] = False
+            st.error("❌ Incorrect password")
+
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        st.text_input("Enter password:", type="password", on_change=password_entered, key="password")
+        return False
+    else:
+        return True
 
 
 # --- Asset Classes Config ---
@@ -582,7 +605,7 @@ def main():
     if 'end_date' not in st.session_state:
         st.session_state.end_date = pd.Timestamp.today()
 
-    st.set_page_config(layout="wide")
+  
     st.title("Risk Regime Analysis")
 
     # Default dates: 1 month ago to today
@@ -675,4 +698,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if check_password():
+        main()
